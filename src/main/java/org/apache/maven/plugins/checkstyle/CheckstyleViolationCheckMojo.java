@@ -31,8 +31,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.LongAdder;
-import java.util.stream.Collectors;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.model.Dependency;
@@ -573,15 +571,16 @@ public class CheckstyleViolationCheckMojo
             xpp.setInput( reader );
 
             final List<Violation> violationsList = getViolations( xpp );
-            long violations = countViolations( violationsList );
+            long violationCount = countViolations( violationsList );
             printViolations( violationsList );
 
-            if ( violations > maxAllowedViolations )
+            if ( violationCount > maxAllowedViolations )
             {
                 if ( failOnViolation )
                 {
                     String msg =
-                        "You have " + violations + " Checkstyle violation" + ( ( violations > 1 ) ? "s" : "" ) + ".";
+                        "You have " + violationCount
+                            + " Checkstyle violation" + ( ( violationCount > 1 ) ? "s" : "" ) + ".";
                     if ( maxAllowedViolations > 0 )
                     {
                         msg += " The maximum number of allowed violations is " + maxAllowedViolations + ".";
@@ -624,14 +623,12 @@ public class CheckstyleViolationCheckMojo
             {
                 continue;
             }
-
-            if ( "file".equals( xpp.getName() ) )
+            else if ( "file".equals( xpp.getName() ) )
             {
                 file = PathTool.getRelativeFilePath( basedir, xpp.getAttributeValue( "", "name" ) );
                 continue;
             }
-
-            if ( !"error".equals( xpp.getName() ) )
+            else if ( ! "error".equals( xpp.getName() ) )
             {
                 continue;
             }
@@ -647,7 +644,7 @@ public class CheckstyleViolationCheckMojo
             Violation violation = new Violation(
                 source,
                 file,
-                Integer.parseInt( line, 10 ),
+                line,
                 severity,
                 message,
                 rule,
@@ -655,7 +652,7 @@ public class CheckstyleViolationCheckMojo
             );
             if ( column != null )
             {
-                violation.setColumn( Integer.parseInt( column, 10 ) );
+                violation.setColumn( column );
             }
 
             violations.add( violation );
@@ -664,32 +661,36 @@ public class CheckstyleViolationCheckMojo
         return Collections.unmodifiableList( violations );
     }
 
-    private long countViolations( List<Violation> violations )
+    private int countViolations( List<Violation> violations )
     {
         List<RuleUtil.Matcher> ignores = violationIgnore == null ? Collections.<RuleUtil.Matcher>emptyList()
             : RuleUtil.parseMatchers( violationIgnore.split( "," ) );
 
-        LongAdder ignored = new LongAdder();
+        int ignored = 0;
 
-        final List<Violation> violationStream = violations.stream()
-            .filter( violation -> isViolation( violation.getSeverity() ) )
-            .filter( violation ->
-            {
-                final boolean isIgnore = !ignore( ignores, violation.getSource() );
-                if ( isIgnore )
-                {
-                    ignored.increment();
-                }
-                return isIgnore;
-            } )
-            .collect( Collectors.toList() );
+        List<Violation> actualViolations = new ArrayList<>();
 
-        final int count = violationStream.size();
-        final long ignoreCount = ignored.sum();
-
-        if ( ignoreCount > 0 )
+        for ( Violation violation : violations )
         {
-            getLog().info( "Ignored " + ignoreCount + " error" + ( ( ignoreCount > 1L ) ? "s" : "" ) + ", " + count
+            if ( ! isViolation( violation.getSeverity() ) )
+            {
+                continue;
+            }
+
+            if ( ignore( ignores, violation.getSource() ) )
+            {
+                ignored++;
+                continue;
+            }
+
+            actualViolations.add( violation );
+        }
+
+        final int count = actualViolations.size();
+
+        if ( ignored > 0 )
+        {
+            getLog().info( "Ignored " + ignored + " error" + ( ( ignored > 1L ) ? "s" : "" ) + ", " + count
                 + " violation" + ( ( count > 1 ) ? "s" : "" ) + " remaining." );
         }
 
@@ -711,10 +712,10 @@ public class CheckstyleViolationCheckMojo
             .filter( violation -> !ignore( ignores, violation.getSource() ) )
             .forEach( violation ->
             {
-                final String message = String.format( "%s:[%d%s] (%s) %s: %s",
+                final String message = String.format( "%s:[%s%s] (%s) %s: %s",
                     violation.getFile(),
                     violation.getLine(),
-                    ( violation.getColumn() == null ) ? "" : ( ',' + violation.getColumn() ),
+                    ( Violation.NO_COLUMN.equals( violation.getColumn() ) ) ? "" : ( ',' + violation.getColumn() ),
                     violation.getCategory(),
                     violation.getRuleName(),
                     violation.getMessage() );
